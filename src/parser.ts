@@ -72,6 +72,7 @@ import {
   ImportDeclaration,
   ImportStatement,
   IndexSignatureNode,
+  LabeledStatement,
   NamespaceDeclaration,
   ParameterNode,
   ParameterKind,
@@ -2844,6 +2845,44 @@ export class Parser extends DiagnosticEmitter {
     return null;
   }
 
+  parseLabeledStatement(
+    tn: Tokenizer,
+    label: IdentifierExpression
+  ): LabeledStatement | null {
+    if (tn.skip(Token.COLON)) {
+      var statement = this.parseStatement(tn, false);
+
+      if (null !== statement) {
+        var labeledStatement = Node.toLabellableStatement(statement);
+
+        if (null !== labeledStatement) {
+          return Node.createLabeledStatement(
+            label,
+            labeledStatement,
+            tn.range(label.range.start, tn.pos)
+          );
+        } else {
+          this.error(
+            DiagnosticCode.Statement_can_not_be_given_a_label,
+            statement.range
+          );
+        }
+      } else {
+        this.error(
+          DiagnosticCode.Statement_expected,
+          tn.range()
+        );
+      }
+    } else {
+      this.error(
+        DiagnosticCode._0_expected,
+        tn.range(), ":"
+      );
+    }
+
+    return null;
+  }
+
   parseStatement(
     tn: Tokenizer,
     topLevel: bool = false
@@ -2929,6 +2968,17 @@ export class Parser extends DiagnosticEmitter {
           statement = this.parseTypeDeclaration(tn, CommonFlags.NONE, null, tn.tokenPos);
           break;
         }
+        // fall-through
+      }
+      case Token.IDENTIFIER: {
+        let identifierText = tn.readIdentifier();
+
+        if (tn.peek(true) == Token.COLON) {
+          let identifier = Node.createIdentifierExpression(identifierText, tn.range());
+          statement = this.parseLabeledStatement(tn, identifier);
+          break;
+        }
+
         // fall-through
       }
       default: {

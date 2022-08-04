@@ -59,6 +59,7 @@ import {
   IfStatement,
   ImportStatement,
   InstanceOfExpression,
+  LabeledStatement,
   ReturnStatement,
   SwitchStatement,
   ThrowStatement,
@@ -293,6 +294,9 @@ export class ASTBuilder {
       case NodeKind.MODULE: {
         this.visitModuleDeclaration(<ModuleDeclaration>node);
         break;
+      }
+      case NodeKind.LABELEDSTATEMENT: {
+        this.visitLabeledStatementDeclaration(<LabeledStatement>node);
       }
 
       // declaration statements
@@ -1484,6 +1488,13 @@ export class ASTBuilder {
     sb.push("module \"");
     sb.push(escapeString(node.moduleName, CharCode.DOUBLEQUOTE));
     sb.push("\"");
+  }
+
+  visitLabeledStatementDeclaration(node: LabeledStatement): void {
+    var sb = this.sb;
+    this.visitIdentifierExpression(node.label);
+    sb.push(":\n");
+    this.visitNode(node.statement);
   }
 
   visitVariableDeclaration(node: VariableDeclaration): void {

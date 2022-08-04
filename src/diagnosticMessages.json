@@ -184,6 +184,11 @@
   "Property '{0}' is missing in type '{1}' but required in type '{2}'.": 2741,
   "Type '{0}' has no call signatures.": 2757,
 
+  "Statement expected.": 3000,
+  "Statement can not be given a label.": 3001,
+  "Statement label '{0}' not found.": 3002,
+  "Duplicated statement label '{0}'.": 3003,
+
   "File '{0}' not found.": 6054,
   "Numeric separators are not allowed here.": 6188,
   "Multiple consecutive numeric separators are not permitted.": 6189,

@@ -147,6 +147,7 @@ import {
   VariableStatement,
   VoidStatement,
   WhileStatement,
+  LabeledStatement,
 
   Expression,
   AssertionExpression,
@@ -2097,7 +2098,9 @@ export class Compiler extends DiagnosticEmitter {
     /** Statement to compile. */
     statement: Statement,
     /** Whether this is the last statement of the body, if known. */
-    isLastInBody: bool = false
+    isLastInBody: bool = false,
+    /** Labels attached to the statement in the source, if any. */
+    labels: string[] = []
   ): ExpressionRef {
     var module = this.module;
     var stmt: ExpressionRef;
@@ -2115,7 +2118,7 @@ export class Compiler extends DiagnosticEmitter {
         break;
       }
       case NodeKind.DO: {
-        stmt = this.compileDoStatement(<DoStatement>statement);
+        stmt = this.compileDoStatement(<DoStatement>statement, labels);
         break;
       }
       case NodeKind.EMPTY: {
@@ -2127,11 +2130,11 @@ export class Compiler extends DiagnosticEmitter {
         break;
       }
       case NodeKind.FOR: {
-        stmt = this.compileForStatement(<ForStatement>statement);
+        stmt = this.compileForStatement(<ForStatement>statement, labels);
         break;
       }
       case NodeKind.FOROF: {
-        stmt = this.compileForOfStatement(<ForOfStatement>statement);
+        stmt = this.compileForOfStatement(<ForOfStatement>statement, labels);
         break;
       }
       case NodeKind.IF: {
@@ -2164,7 +2167,7 @@ export class Compiler extends DiagnosticEmitter {
         break;
       }
       case NodeKind.WHILE: {
-        stmt = this.compileWhileStatement(<WhileStatement>statement);
+        stmt = this.compileWhileStatement(<WhileStatement>statement, labels);
         break;
       }
       case NodeKind.TYPEDECLARATION: {
@@ -2179,6 +2182,10 @@ export class Compiler extends DiagnosticEmitter {
       }
       case NodeKind.MODULE: {
         stmt = module.nop();
+        break;
+      }
+      case NodeKind.LABELEDSTATEMENT: {
+        stmt = this.compileLabeledStatement(<LabeledStatement>statement, labels);
         break;
       }
       default: {
@@ -2246,17 +2253,33 @@ export class Compiler extends DiagnosticEmitter {
     statement: BreakStatement
   ): ExpressionRef {
     var module = this.module;
+    var flow = this.currentFlow;
+    var breakLabel = null;
     var labelNode = statement.label;
     if (labelNode) {
-      this.error(
-        DiagnosticCode.Not_implemented_0,
-        labelNode.range,
-        "Break label"
-      );
-      return module.unreachable();
+      /**
+       * todo EXPERIMENTAL
+       * It does not seem that we need to do anything else than that, w.r.t. flow flags especially.
+       * Not even to trigger dead-code optimizations, etc., which feels a bit odd?
+       * Or at least, I could not find an example yet where the behavior did not match the expected one.
+       */
+      var label = labelNode.text;
+      var breakToFlow: Flow | null = flow;
+      while ((null !== breakToFlow) && (breakToFlow.sourceStatementLabels.indexOf(label) === -1)) {
+        breakToFlow = breakToFlow.parent;
+      }
+      if (null == breakToFlow) {
+        this.error(
+          DiagnosticCode.Statement_label_0_not_found,
+          labelNode.range,
+          label
+        );
+        return module.unreachable();
+      }
+      breakLabel = breakToFlow.breakLabel;
+    } else {
+      breakLabel = flow.breakLabel;
     }
-    var flow = this.currentFlow;
-    var breakLabel = flow.breakLabel;
     if (breakLabel == null) {
       this.error(
         DiagnosticCode.A_break_statement_can_only_be_used_within_an_enclosing_iteration_or_switch_statement,
@@ -2273,18 +2296,29 @@ export class Compiler extends DiagnosticEmitter {
     statement: ContinueStatement
   ): ExpressionRef {
     var module = this.module;
-    var label = statement.label;
-    if (label) {
-      this.error(
-        DiagnosticCode.Not_implemented_0,
-        label.range,
-        "Continue label"
-      );
-      return module.unreachable();
+    var flow = this.currentFlow;
+    var continueLabel = null;
+    var labelNode = statement.label;
+    if (labelNode) {
+      // todo see compileBreakStatement()
+      var label = labelNode.text;
+      var continueToFlow: Flow | null = flow;
+      while ((null !== continueToFlow) && (continueToFlow.sourceStatementLabels.indexOf(label) === -1)) {
+        continueToFlow = continueToFlow.parent;
+      }
+      if (null == continueToFlow) {
+        this.error(
+          DiagnosticCode.Statement_label_0_not_found,
+          labelNode.range,
+          label
+        );
+        return module.unreachable();
+      }
+      continueLabel = continueToFlow.continueLabel;
+    } else {
+      continueLabel = flow.continueLabel;
     }
     // Check if 'continue' is allowed here
-    var flow = this.currentFlow;
-    var continueLabel = flow.continueLabel;
     if (continueLabel == null) {
       this.error(
         DiagnosticCode.A_continue_statement_can_only_be_used_within_an_enclosing_iteration_statement,
@@ -2299,16 +2333,20 @@ export class Compiler extends DiagnosticEmitter {
 
   private compileDoStatement(
     /** Statement to compile. */
-    statement: DoStatement
+    statement: DoStatement,
+    /** Labels attached to the statement in the source. */
+    labels: string[]
   ): ExpressionRef {
-    return this.doCompileDoStatement(statement, null);
+    return this.doCompileDoStatement(statement, null, labels);
   }
 
   private doCompileDoStatement(
     /** Statement to compile. */
     statement: DoStatement,
     /** If recompiling, the flow with differing local flags that triggered it. */
-    flowAfter: Flow | null
+    flowAfter: Flow | null,
+    /** Labels attached to the statement in the source. */
+    labels: string[]
   ): ExpressionRef {
     var module = this.module;
     var outerFlow = this.currentFlow;
@@ -2337,6 +2375,8 @@ export class Compiler extends DiagnosticEmitter {
     var continueLabel = "do-continue|" + label;
     flow.continueLabel = continueLabel;
     var loopLabel = "do-loop|" + label;
+
+    flow.sourceStatementLabels = labels;
 
     // Compile the body (always executes)
     var bodyFlow = flow.fork();
@@ -2405,7 +2445,7 @@ export class Compiler extends DiagnosticEmitter {
         if (Flow.hasIncompatibleLocalStates(flowBefore, flow)) {
           outerFlow.popBreakLabel();
           this.currentFlow = outerFlow;
-          return this.doCompileDoStatement(statement, flow);
+          return this.doCompileDoStatement(statement, flow, labels);
         }
       }
     }
@@ -2440,16 +2480,20 @@ export class Compiler extends DiagnosticEmitter {
 
   private compileForStatement(
     /** Statement to compile. */
-    statement: ForStatement
+    statement: ForStatement,
+    /** Labels attached to the statement in the source. */
+    labels: string[]
   ): ExpressionRef {
-    return this.doCompileForStatement(statement, null);
+    return this.doCompileForStatement(statement, null, labels);
   }
 
   private doCompileForStatement(
     /** Statement to compile. */
     statement: ForStatement,
     /** If recompiling, the flow with differing local flags that triggered it. */
-    flowAfter: Flow | null
+    flowAfter: Flow | null,
+    /** Labels attached to the statement in the source. */
+    labels: string[]
   ): ExpressionRef {
     var module = this.module;
     var outerFlow = this.currentFlow;
@@ -2483,6 +2527,8 @@ export class Compiler extends DiagnosticEmitter {
     var continueLabel = "for-continue|" + label;
     flow.continueLabel = continueLabel;
     var loopLabel = "for-loop|" + label;
+
+    flow.sourceStatementLabels = labels;
 
     // Compile initializer if present
     var initializer = statement.initializer;
@@ -2594,7 +2640,7 @@ export class Compiler extends DiagnosticEmitter {
         flow.freeScopedLocals();
         outerFlow.popBreakLabel();
         this.currentFlow = outerFlow;
-        return this.doCompileForStatement(statement, flow);
+        return this.doCompileForStatement(statement, flow, labels);
       }
     }
     loopStmts.push(
@@ -2625,7 +2671,8 @@ export class Compiler extends DiagnosticEmitter {
   }
 
   private compileForOfStatement(
-    statement: ForOfStatement
+    statement: ForOfStatement,
+    labels: string[]
   ): ExpressionRef {
     this.error(
       DiagnosticCode.Not_implemented_0,
@@ -3151,16 +3198,20 @@ export class Compiler extends DiagnosticEmitter {
 
   private compileWhileStatement(
     /** Statement to compile. */
-    statement: WhileStatement
+    statement: WhileStatement,
+    /** Labels attached to the statement in the source. */
+    labels: string[]
   ): ExpressionRef {
-    return this.doCompileWhileStatement(statement, null);
+    return this.doCompileWhileStatement(statement, null, labels);
   }
 
   private doCompileWhileStatement(
     /** Statement to compile. */
     statement: WhileStatement,
     /** If recompiling, the flow with differing local flags that triggered it. */
-    flowAfter: Flow | null
+    flowAfter: Flow | null,
+    /** Labels attached to the statement in the source. */
+    labels: string[]
   ): ExpressionRef {
     var module = this.module;
     var outerFlow = this.currentFlow;
@@ -3189,6 +3240,8 @@ export class Compiler extends DiagnosticEmitter {
     flow.breakLabel = breakLabel;
     var continueLabel = "while-continue|" + label;
     flow.continueLabel = continueLabel;
+
+    flow.sourceStatementLabels = labels;
 
     // Precompute the condition
     var condFlow = flow.fork();
@@ -3272,7 +3325,7 @@ export class Compiler extends DiagnosticEmitter {
         flow.freeTempLocal(tcond);
         outerFlow.popBreakLabel();
         this.currentFlow = outerFlow;
-        return this.doCompileWhileStatement(statement, flow);
+        return this.doCompileWhileStatement(statement, flow, labels);
       }
     }
     stmts.push(
@@ -3297,6 +3350,44 @@ export class Compiler extends DiagnosticEmitter {
       expr = module.block(null, [ expr, module.unreachable() ]);
     }
     return expr;
+  }
+
+  private compileLabeledStatement(
+    /** Statement to compile. */
+    statement: LabeledStatement,
+    /** Labels attached to the statement in the source. */
+    labels: string[]
+  ): ExpressionRef {
+    var outerFlow = this.currentFlow;
+    var innerFlow = outerFlow.fork();
+    this.currentFlow = innerFlow;
+    var parentFlow: Flow | null = outerFlow;
+
+    var labelNode = statement.label;
+
+    while (null !== parentFlow) {
+      if (parentFlow.sourceStatementLabels.indexOf(labelNode.text) >= 0) {
+        this.error(
+          DiagnosticCode.Duplicated_statement_label_0,
+          labelNode.range, labelNode.text
+        );
+        return this.module.unreachable();
+      }
+
+      parentFlow = parentFlow.parent;
+    }
+
+    var stmt = this.compileStatement(
+      statement.statement,
+      false,
+      [ ...labels, statement.label.text ]
+    );
+
+    innerFlow.freeScopedLocals();
+    outerFlow.inherit(innerFlow);
+    this.currentFlow = outerFlow;
+
+    return stmt;
   }
 
   // === Expressions ==============================================================================

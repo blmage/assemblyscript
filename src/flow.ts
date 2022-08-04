@@ -231,6 +231,8 @@ export class Flow {
   continueLabel: string | null = null;
   /** The label we break to when encountering a break statement. */
   breakLabel: string | null = null;
+  /** The labels attached to the current statement in the source. */
+  sourceStatementLabels: string[] = [];
   /** Scoped local variables. */
   scopedLocals: Map<string,Local> | null = null;
   /** Local flags. */

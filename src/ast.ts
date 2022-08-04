@@ -100,6 +100,7 @@ export enum NodeKind {
   VOID,
   WHILE,
   MODULE,
+  LABELEDSTATEMENT,
 
   // declaration statements
   CLASSDECLARATION,
@@ -640,6 +641,14 @@ export abstract class Node {
     return new IndexSignatureNode(keyType, valueType, flags, range);
   }
 
+  static createLabeledStatement(
+    label: IdentifierExpression,
+    statement: LabellableStatement,
+    range: Range
+  ): LabeledStatement {
+    return new LabeledStatement(label, statement, range);
+  }
+
   static createMethodDeclaration(
     name: IdentifierExpression,
     decorators: DecoratorNode[] | null,
@@ -753,6 +762,22 @@ export abstract class Node {
     range: Range
   ): WhileStatement {
     return new WhileStatement(condition, statement, range);
+  }
+
+  static toLabellableStatement(
+    statement: Statement
+  ): LabellableStatement | null {
+    if (
+      (statement instanceof DoStatement)
+      || (statement instanceof ForStatement)
+      || (statement instanceof ForOfStatement)
+      || (statement instanceof LabeledStatement)
+      || (statement instanceof WhileStatement)
+    ) {
+      return statement;
+    }
+
+    return null;
   }
 
   /** Tests if this node is a literal of the specified kind. */
@@ -2153,6 +2178,28 @@ export class InterfaceDeclaration extends ClassDeclaration {
   ) {
     super(name, decorators, flags, typeParameters, extendsType, implementsTypes, members, range);
     this.kind = NodeKind.INTERFACEDECLARATION;
+  }
+}
+
+/** Represents any kind of statement to which labels can be attached. */
+export type LabellableStatement
+  = DoStatement
+  | ForStatement
+  | ForOfStatement
+  | LabeledStatement
+  | WhileStatement;
+
+/** Represents a statement to which one or more labels are attached. */
+export class LabeledStatement extends Statement {
+  constructor(
+      /** Attached label. */
+      public label: IdentifierExpression,
+      /** Labeled statement. */
+      public statement: LabellableStatement,
+      /** Source range. */
+      range: Range
+  ) {
+    super(NodeKind.LABELEDSTATEMENT, range);
   }
 }
 
