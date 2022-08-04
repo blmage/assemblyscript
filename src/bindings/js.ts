@@ -213,7 +213,7 @@ export class JSBuilder extends ExportsWalker {
     sb.push("))({}),\n");
     this.visitNamespace(name, element);
   }
-  
+
   makeGlobalImport(moduleName: string, name: string, element: Global): void {
     var sb = this.sb;
     var type = element.type;
@@ -770,6 +770,7 @@ export class JSBuilder extends ExportsWalker {
   }
 `);
     }
+    // todo option to lift static array into TypedArray if possible? (=> decorator?)
     if (this.needsLiftStaticArray) {
       let objectInstance = program.OBJECTInstance;
       let rtSizeOffset = objectInstance.offsetof("rtSize") - objectInstance.nextMemoryOffset;
@@ -784,12 +785,16 @@ export class JSBuilder extends ExportsWalker {
 `);
     }
     if (this.needsLowerStaticArray) {
-      sb.push(`  function __lowerStaticArray(lowerElement, id, align, values) {
+      sb.push(`  function __lowerStaticArray(typedArrayCtor, lowerElement, id, align, values) {
     if (values == null) return 0;
     const
       length = values.length,
       buffer = exports.__pin(exports.__new(length << align, id)) >>> 0;
-    for (let i = 0; i < length; i++) lowerElement(buffer + (i << align >>> 0), values[i]);
+    if (typedArrayCtor && (length >= values.length)) {
+      new typedArrayCtor(memory.buffer, buffer, length).set(values);
+    } else {
+      for (let i = 0; i < length; i++) lowerElement(buffer + (i << align >>> 0), values[i]);
+    }
     exports.__unpin(buffer);
     return buffer;
   }
@@ -947,6 +952,35 @@ export class JSBuilder extends ExportsWalker {
     return true;
   }
 
+  /** If a type is a number type, returns the corresponding TypedArray constructor. */
+  getNumericTypeTypedArrayConstructor(type: Type): string|null {
+    if (type.isNumericValue) {
+      if (type == Type.i8) {
+        return 'Int8Array';
+      } else if (type == Type.u8 || type == Type.bool) {
+        return 'Uint8Array';
+      } else if (type == Type.i16) {
+        return 'Int16Array';
+      } else if (type == Type.u16) {
+        return 'Uint16Array';
+      } else if (type == Type.i32 || type == Type.isize32) {
+        return 'Int32Array';
+      } else if (type == Type.u32 || type == Type.usize32) {
+        return 'Uint32Array';
+      } else if (type == Type.i64 || type == Type.isize64) {
+        return 'BigInt64Array';
+      } else if (type == Type.u64 || type == Type.usize64) {
+        return 'BigUint64Array';
+      } else if (type == Type.f32) {
+        return 'Float32Array';
+      } else if (type == Type.f64) {
+        return 'Float64Array';
+      }
+    }
+
+    return null;
+  }
+
   /** Lifts a WebAssembly value to a JavaScript value. */
   makeLiftFromValue(name: string, type: Type, sb: string[] = this.sb): void {
     if (type.isInternalReference) {
@@ -1038,6 +1072,8 @@ export class JSBuilder extends ExportsWalker {
       } else if (clazz.extends(this.program.staticArrayPrototype)) {
         let valueType = clazz.getArrayValueType();
         sb.push("__lowerStaticArray(");
+        sb.push(this.getNumericTypeTypedArrayConstructor(valueType) || "null");
+        sb.push(", ");
         this.makeLowerToMemory(valueType, sb);
         sb.push(", ");
         sb.push(clazz.id.toString());
